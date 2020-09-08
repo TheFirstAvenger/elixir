@@ -44,14 +44,28 @@ defmodule Mix.Tasks.Deps.Add do
 
   @impl true
   def run(args) do
-    mix_exs = add(args, File.read!("mix.exs"))
-    File.write!("mix.exs", mix_exs)
+    case add(args, File.read!("mix.exs")) do
+      {:ok, mix_exs} ->
+        File.write!("mix.exs", mix_exs)
+        Mix.shell().info([:green, "Successfully added to mix.exs"])
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def add(args, mix_exs) do
     {opts, rest, invalid} =
       OptionParser.parse(args,
-        strict: [version: :string, only: :keep, runtime: :boolean, path: :string]
+        strict: [
+          version: :string,
+          only: :keep,
+          runtime: :boolean,
+          path: :string,
+          github: :string,
+          ref: :string,
+          tag: :string
+        ]
       )
 
     app =
@@ -65,8 +79,21 @@ defmodule Mix.Tasks.Deps.Add do
 
     if invalid != [], do: Mix.raise("Invalid options: #{inspect(invalid)}")
 
-    if opts[:version] && opts[:path],
-      do: Mix.raise("Cannot specify both version and path")
+    [:version, :path, :github]
+    |> Enum.filter(&(!is_nil(opts[&1])))
+    |> case do
+      [_, _ | _] = all ->
+        Mix.raise("Can only specify one of #{inspect(all)}")
+
+      _ ->
+        :ok
+    end
+
+    if is_nil(opts[:github]) && !is_nil(opts[:tag]),
+      do: Mix.raise("tag option requires github option")
+
+    if is_nil(opts[:github]) && !is_nil(opts[:ref]),
+      do: Mix.raise("ref option requires github option")
 
     app = normalize_atom(app, "package")
 
@@ -79,7 +106,32 @@ defmodule Mix.Tasks.Deps.Add do
 
     opts = Keyword.put(opts, :only, only)
 
-    Mix.Dep.add(app, opts, mix_exs)
+    case Mix.Dep.add(app, opts, mix_exs) do
+      {:ok, new_line, new_mix_exs} ->
+        Mix.shell().info("Adding new dep:")
+        Mix.shell().info(new_line)
+        {:ok, new_mix_exs}
+
+      {:error, new_line, :not_formatted} ->
+        Mix.shell().info([
+          :red,
+          "mix_exs was not formatted. Please run `mix format` and retry, or add this line to mix.exs manually:"
+        ])
+
+        Mix.shell().info([new_line])
+
+        {:error, :not_formatted}
+
+      {:error, new_line, :deps_not_found} ->
+        Mix.shell().info([
+          :red,
+          "Could not find `defp deps do` in your mix.exs. Please add this line to mix.exs manually:"
+        ])
+
+        Mix.shell().info([new_line])
+
+        {:error, :deps_not_found}
+    end
   end
 
   defp normalize_atom(atom, type) do

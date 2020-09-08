@@ -1,18 +1,28 @@
 defmodule Mix.Dep.Adder do
   def add(app, opts, mix_exs) do
-    lines = String.split(mix_exs, "\n")
-
-    check_for_app!(lines, app)
-
     dep_opts = get_version_str(opts, app) <> get_only_string(opts) <> get_runtime_string(opts)
     new_line = "{:#{app}, #{dep_opts}}"
 
-    new_lines = add_dep_line(lines, [], new_line)
+    formatted = format_to_string(mix_exs)
 
-    Mix.shell().info([:green, "Added #{app} to mix.exs: #{new_line}"])
+    if mix_exs == formatted do
+      lines = String.split(mix_exs, "\n")
+      check_for_app!(lines, app)
 
-    Enum.join(new_lines, "\n")
+      case add_dep_line(lines, [], new_line) do
+        new_lines when is_list(new_lines) ->
+          {:ok, new_line, new_lines |> Enum.join("\n") |> format_to_string()}
+
+        :deps_not_found ->
+          {:error, new_line, :deps_not_found}
+      end
+    else
+      {:error, new_line, :not_formatted}
+    end
   end
+
+  defp format_to_string(str),
+    do: str |> Code.format_string!() |> IO.iodata_to_binary() |> Kernel.<>("\n")
 
   defp get_runtime_string(opts) do
     if Keyword.has_key?(opts, :runtime) and !opts[:runtime] do
@@ -31,17 +41,28 @@ defmodule Mix.Dep.Adder do
   end
 
   defp get_version_str(opts, app) do
-    case opts[:path] do
-      nil ->
-        case opts[:version] || latest_hex_version(app) do
+    cond do
+      path = opts[:path] ->
+        ~s|path: "#{path}"|
+
+      github = opts[:github] ->
+        ~s|github: "#{github}"| <> ref_or_tag(opts)
+
+      version = opts[:version] || latest_hex_version(app) ->
+        case version do
           "~> " <> _ = version -> ~s|"#{version}"|
           ">= " <> _ = version -> ~s|"#{version}"|
           "0.0.0" -> ~s|">= 0.0.0"|
           version -> ~s|"~> #{version}"|
         end
+    end
+  end
 
-      path ->
-        ~s|path: "#{path}"|
+  defp ref_or_tag(opts) do
+    cond do
+      ref = opts[:ref] -> ~s|, ref: "#{ref}"|
+      tag = opts[:tag] -> ~s|, tag: "#{tag}"|
+      true -> ""
     end
   end
 
@@ -91,7 +112,7 @@ defmodule Mix.Dep.Adder do
     end
   end
 
-  defp add_dep_line(_, _, _), do: Mix.raise("Unable to identify deps function in mix.exs")
+  defp add_dep_line(_, _, _), do: :deps_not_found
 
   defp indent(line, parent_line) do
     String.duplicate(" ", indented(parent_line) + 2) <> line
